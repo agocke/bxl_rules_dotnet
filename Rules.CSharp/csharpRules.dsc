@@ -12,15 +12,21 @@
  * Usage:
  *   import * as CSharp from "Sdk.Rules.CSharp";
  *
+ *   const toolchain = CSharp.csharpToolchain({
+ *       hostExe: f`/path/to/dotnet`,
+ *       compiler: f`/path/to/csc.dll`,
+ *   });
+ *
  *   const myLib = CSharp.csharp_library({
  *       name: "MyLib",
+ *       toolchain: toolchain,
  *       srcs: globR(d`.`, "*.cs"),
- *       refs: [f`path/to/Dependency.dll`],
+ *       fileRefs: [f`path/to/Dependency.dll`],
  *   });
  */
 
 import * as Rules from "Sdk.Rules";
-import {Artifact, Cmd, Transformer} from "Sdk.Transformers";
+import {Cmd} from "Sdk.Transformers";
 
 // ============================================================================
 //  CSharpToolchain — declares what tools C# rules need
@@ -28,20 +34,7 @@ import {Artifact, Cmd, Transformer} from "Sdk.Transformers";
 
 /**
  * The C# toolchain — analogous to Bazel's `//dotnet:toolchain_type`.
- *
- * Tools are bundled with this SDK package. The toolchain references them
- * via paths relative to the SDK module directory — no external labels or
- * absolute paths needed.
  */
-
-// SDK package root — navigate from this spec's directory to the package root.
-// When this SDK is distributed as a downloaded archive, the layout is:
-//   bxl_rules_csharp/
-//     Rules.CSharp/csharpRules.dsc  ← this file
-//     sdk/dotnet, sdk/roslyn/csc.dll
-//     xunit/xunit.console.dll
-const sdkPackageRoot = d`${Context.getSpecFileDirectory().parent}`;
-const sdkToolsDir = d`${sdkPackageRoot}/sdk`;
 
 @@public
 export interface CSharpToolchain extends Rules.Toolchain {
@@ -65,20 +58,29 @@ export function csharpToolchain(args: { name?: string, compiler: File, hostExe: 
     };
 }
 
-// Default toolchain — uses tools bundled with this SDK package.
-const defaultToolchain = csharpToolchain({
-    name: "default_csharp_toolchain",
-    compiler: f`${sdkToolsDir}/roslyn/csc.dll`,
-    hostExe: f`${sdkToolsDir}/dotnet`
-});
-
 /**
- * Get the default C# toolchain. Useful for repo-specific rules
- * that need the dotnet host (e.g., test runners).
+ * Create a CSharpToolchain from the contents of an extracted SDK/archive.
+ *
+ * This is the common path when a workspace acquires the .NET SDK with
+ * BuildXL's Download resolver and wants to pass the resulting content to
+ * these rules.
  */
 @@public
-export function getDefaultToolchain(): CSharpToolchain {
-    return defaultToolchain;
+export function csharpToolchainFromContents(args: {
+    name?: string,
+    contents: StaticDirectory,
+    compilerPath: string,
+    hostPath?: string,
+}): CSharpToolchain {
+    return csharpToolchain({
+        name: args.name || "csharp_toolchain",
+        compiler: findFileInContents(args.contents, args.compilerPath),
+        hostExe: findFileInContents(args.contents, args.hostPath || "dotnet"),
+    });
+}
+
+function findFileInContents(contents: StaticDirectory, path: string): File {
+    return contents.assertExistence(r`${path}`);
 }
 
 // ============================================================================
@@ -92,7 +94,7 @@ export function getDefaultToolchain(): CSharpToolchain {
 @@public
 export interface CSharpInfo extends Rules.Provider {
     /** The compiled assembly (DLL or EXE). */
-    binary: DerivedFile;
+    binary: File;
 
     /** Direct assembly references used to compile this target. */
     refs: File[];
@@ -146,8 +148,8 @@ export interface CSharpCommonAttrs {
     /** Roslyn analyzer/source-generator DLLs (passed via /analyzer:). */
     analyzers?: File[];
 
-    /** Override the default toolchain. */
-    toolchain?: CSharpToolchain;
+    /** Toolchain to use for this target. */
+    toolchain: CSharpToolchain;
 }
 
 // ============================================================================
@@ -156,8 +158,8 @@ export interface CSharpCommonAttrs {
 
 interface CSharpResolvedAttrs {
     name: string;
-    srcs: File[];
-    refs: File[];
+    srcs: Rules.Artifact[];
+    refs: Rules.Artifact[];
     deps: CSharpInfo[];
     optimize: boolean;
     allowUnsafe: boolean;
@@ -165,7 +167,7 @@ interface CSharpResolvedAttrs {
     defines: string[];
     nowarn: string[];
     compilerOptions: string[];
-    analyzers: File[];
+    analyzers: Rules.Artifact[];
 }
 
 /**
@@ -178,7 +180,7 @@ function resolveCSharpAttrs(attrs: CSharpCommonAttrs, resolver: Rules.LabelResol
     return {
         name: attrs.name,
         srcs: resolver.resolveAll(attrs.srcs),
-        refs: [...refFiles, ...(attrs.fileRefs || [])],
+        refs: [...refFiles, ...(attrs.fileRefs || []).map(f => Rules.sourceArtifact(f))],
         deps: attrs.deps || [],
         optimize: attrs.optimize || false,
         allowUnsafe: attrs.allowUnsafe || false,
@@ -186,7 +188,7 @@ function resolveCSharpAttrs(attrs: CSharpCommonAttrs, resolver: Rules.LabelResol
         defines: attrs.defines || [],
         nowarn: attrs.nowarn || [],
         compilerOptions: attrs.compilerOptions || [],
-        analyzers: attrs.analyzers || []
+        analyzers: (attrs.analyzers || []).map(f => Rules.sourceArtifact(f))
     };
 }
 
@@ -203,13 +205,20 @@ export interface CsharpLibraryAttrs extends CSharpCommonAttrs {
  *
  * Analogous to rules_dotnet's `csharp_library`.
  */
+function createCSharpRule<TAttrs extends CSharpCommonAttrs>(doc: string, targetType: TargetType): (args: TAttrs) => CSharpInfo {
+    return (args: TAttrs) => Rules.rule<TAttrs, CSharpResolvedAttrs, CSharpToolchain, CSharpInfo>({
+        doc: doc,
+        toolchain: args.toolchain,
+        resolve: resolveCSharpAttrs,
+        impl: (ctx) => compileImpl(ctx.actions, ctx.args, ctx.toolchain, targetType)
+    })(args);
+}
+
 @@public
-export const csharp_library = Rules.rule<CsharpLibraryAttrs, CSharpResolvedAttrs, CSharpToolchain, CSharpInfo>({
-    doc: "Compile a C# class library",
-    toolchain: defaultToolchain,
-    resolve: resolveCSharpAttrs,
-    impl: (ctx) => compileImpl(ctx.actions, ctx.args, ctx.toolchain, "library")
-});
+export const csharp_library = createCSharpRule<CsharpLibraryAttrs>(
+    "Compile a C# class library",
+    "library"
+);
 
 // ============================================================================
 //  csharp_binary — rule declaration
@@ -225,12 +234,10 @@ export interface CsharpBinaryAttrs extends CSharpCommonAttrs {
  * Analogous to rules_dotnet's `csharp_binary`.
  */
 @@public
-export const csharp_binary = Rules.rule<CsharpBinaryAttrs, CSharpResolvedAttrs, CSharpToolchain, CSharpInfo>({
-    doc: "Compile a C# exe",
-    toolchain: defaultToolchain,
-    resolve: resolveCSharpAttrs,
-    impl: (ctx) => compileImpl(ctx.actions, ctx.args, ctx.toolchain, "exe")
-});
+export const csharp_binary = createCSharpRule<CsharpBinaryAttrs>(
+    "Compile a C# exe",
+    "exe"
+);
 
 // ============================================================================
 //  compile implementation (shared)
@@ -240,16 +247,16 @@ type TargetType = "library" | "exe";
 
 function compileImpl(actions: Rules.Actions, args: CSharpResolvedAttrs, toolchain: CSharpToolchain, targetType: TargetType): CSharpInfo {
     // .NET Core assemblies are always .dll — /target:exe just sets the entry point.
-    const outDll = actions.declareFile(args.name + ".dll");
+    const outDll = actions.declareOutput(args.name + ".dll");
 
     // All refs are pre-resolved: label refs + file refs + transitive deps
-    const depRefs = args.deps.map(dep => dep.binary);
+    const depRefs = args.deps.map(dep => Rules.sourceArtifact(dep.binary));
     const allRefs = [...args.refs, ...depRefs];
 
-    // Build csc command line — toolchain files are bundled, no resolution needed
+    // Build csc command line from the supplied toolchain.
     const cscArgs: Argument[] = [
-        Cmd.argument(Artifact.input(toolchain.compiler)),
-        Cmd.option("/out:", Artifact.output(outDll.path)),
+        Cmd.argument(Rules.cmdInput(Rules.sourceArtifact(toolchain.compiler))),
+        Cmd.option("/out:", Rules.cmdOutput(outDll)),
         Cmd.argument(`/target:${targetType}`),
         Cmd.argument("/noconfig"),
         Cmd.argument("/nostdlib+"),
@@ -264,9 +271,9 @@ function compileImpl(actions: Rules.Actions, args: CSharpResolvedAttrs, toolchai
         Cmd.argument(`/nullable:${args.nullable}`),
         ...args.defines.map(d => Cmd.argument(`/define:${d}`)),
         ...args.compilerOptions.map(o => Cmd.argument(o)),
-        ...args.analyzers.map(a => Cmd.option("/analyzer:", Artifact.input(a))),
-        ...allRefs.map(r => Cmd.option("/reference:", Artifact.input(r))),
-        ...args.srcs.map(s => Cmd.argument(Artifact.input(s)))
+        ...args.analyzers.map(a => Cmd.option("/analyzer:", Rules.cmdInput(a))),
+        ...allRefs.map(r => Cmd.option("/reference:", Rules.cmdInput(r))),
+        ...args.srcs.map(s => Cmd.argument(Rules.cmdInput(s)))
     ];
 
     const outputs = actions.run({
@@ -276,19 +283,20 @@ function compileImpl(actions: Rules.Actions, args: CSharpResolvedAttrs, toolchai
         description: `csc [${targetType}]: ${args.name}`
     });
 
-    const binary = outputs[0];
+    const binary = Rules.getFile(outputs[0]);
+    const refFiles = allRefs.map(r => Rules.getFile(r));
 
     // Collect transitive runfiles: this target's binary + all ref assemblies.
     const depRunfiles = args.deps.reduce(
         (acc: File[], dep: CSharpInfo) => [...acc, ...(dep.defaultInfo.runfiles || [])],
         [] as File[]
     );
-    const runfiles = [binary, ...allRefs, ...depRunfiles];
+    const runfiles = [binary, ...refFiles, ...depRunfiles];
 
     return {
         kind: "CSharpInfo",
         binary: binary,
-        refs: allRefs,
+        refs: refFiles,
         deps: args.deps,
         defaultInfo: Rules.defaultInfo({ files: [binary], runfiles: runfiles })
     };
