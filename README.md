@@ -1,42 +1,94 @@
 # bxl_rules_csharp — C# Build Rules for BuildXL
 
-A C# compilation SDK built on [bxl_rules](../bxl_rules/). Provides `csharp_library` and `csharp_binary` rules with a bundled .NET SDK — no system-installed compiler needed.
+A C# compilation SDK built on [bxl_rules](https://github.com/agocke/bxl_rules). It provides `csharp_library` and `csharp_binary`, but the consuming workspace is responsible for supplying the .NET toolchain — typically by downloading an SDK archive with BuildXL's `Download` resolver.
 
 ## Quick Start
 
-### 1. Add to your `config.dsc`
+### 1. Add resolvers to `config.dsc`
 
 ```typescript
 config({
     resolvers: [
-        { kind: "DScript", root: d`/path/to/bxl_rules` },
-        { kind: "DScript", root: d`/path/to/bxl_rules_csharp` },
-        // ... your modules
-    ]
+        {
+            kind: "GitRepository",
+            repositories: [{
+                moduleName: "bxl_rules_repo",
+                owner: "agocke",
+                repository: "bxl_rules",
+                commit: "6d141ed04aafb5d021b219d8de127f4d929d72ca",
+            }],
+        },
+        {
+            kind: "Download",
+            downloads: [{
+                moduleName: "DotNetSdk",
+                url: "https://builds.dotnet.microsoft.com/dotnet/Sdk/10.0.201/dotnet-sdk-10.0.201-linux-x64.tar.gz",
+                archiveType: "tgz",
+            }],
+        },
+        {
+            kind: "DScript",
+            root: d`/path/to/bxl_rules_csharp`,
+        },
+    ],
 });
 ```
 
-### 2. Write a BUILD.dsc
+The example above uses the Linux x64 SDK archive. Swap the URL and `compilerPath` for the host RID you want to support.
+
+Third-party workspaces that use both `bxl_rules` and `bxl_rules_csharp` should declare both: `bxl_rules` via `GitRepository` (or another resolver of their choice) and this repo as a normal DScript root/module.
+
+### 2. Construct a toolchain from the downloaded SDK
 
 ```typescript
 import * as CSharp from "Sdk.Rules.CSharp";
 
+const dotnetSdk = importFrom("DotNetSdk").extracted;
+
+const toolchain = CSharp.csharpToolchainFromContents({
+    name: "dotnet-sdk",
+    contents: dotnetSdk,
+    hostPath: "dotnet",
+    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
+});
+```
+
+You can also build a toolchain from explicit `File`s with `CSharp.csharpToolchain({ compiler, hostExe })` if your workspace acquires the host/compiler some other way.
+
+### 3. Write a BUILD.dsc
+
+```typescript
+import * as CSharp from "Sdk.Rules.CSharp";
+
+const dotnetSdk = importFrom("DotNetSdk").extracted;
+const toolchain = CSharp.csharpToolchainFromContents({
+    contents: dotnetSdk,
+    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
+});
+
+const systemRuntime = dotnetSdk.getFile(
+    r`packs/Microsoft.NETCore.App.Ref/10.0.5/ref/net10.0/System.Runtime.dll`
+);
+
 @@public
 export const myLib = CSharp.csharp_library({
     name: "MyLib",
+    toolchain: toolchain,
     srcs: ["Foo.cs", "Bar.cs"],
-    refs: ["//path/to/ref:System.Runtime.dll"]
+    fileRefs: [systemRuntime],
 });
 
 @@public
 export const myApp = CSharp.csharp_binary({
     name: "MyApp",
+    toolchain: toolchain,
     srcs: ["Program.cs"],
-    deps: [myLib]
+    fileRefs: [systemRuntime],
+    deps: [myLib],
 });
 ```
 
-That's it. Source files are labels (strings), not file paths. The rule resolves them, invokes the bundled Roslyn compiler, and returns a `CSharpInfo` provider with the compiled assembly.
+Source files are labels (strings), not file paths. The rule resolves them, invokes the supplied Roslyn compiler, and returns a `CSharpInfo` provider with the compiled assembly.
 
 ## Rules
 
@@ -47,9 +99,10 @@ Compiles a C# class library (DLL).
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `name` | `string` | required | Assembly name (becomes `{name}.dll`) |
+| `toolchain` | `CSharpToolchain` | required | Toolchain that provides `dotnet` and `csc.dll` |
 | `srcs` | `Label[]` | required | C# source file labels |
 | `refs` | `Label[]` | `[]` | Assembly reference labels (resolved to files) |
-| `fileRefs` | `File[]` | `[]` | Pre-resolved assembly references (e.g., from NuGet) |
+| `fileRefs` | `File[]` | `[]` | Pre-resolved assembly references (e.g. from downloads or NuGet) |
 | `deps` | `CSharpInfo[]` | `[]` | Dependencies on other C# targets |
 | `optimize` | `boolean` | `false` | Enable compiler optimizations |
 | `allowUnsafe` | `boolean` | `false` | Allow unsafe code blocks |
@@ -61,7 +114,7 @@ Compiles a C# class library (DLL).
 
 ### csharp_binary
 
-Same attributes as `csharp_library`. Compiles with `/target:exe` so the assembly has an entry point. The output is still a `.dll` (this is .NET Core — the host runs it via `dotnet exec`).
+Same attributes as `csharp_library`. Compiles with `/target:exe` so the assembly has an entry point. The output is still a `.dll` because .NET runs it through the host.
 
 ## Providers
 
@@ -70,36 +123,28 @@ Both rules return `CSharpInfo`:
 ```typescript
 interface CSharpInfo extends Provider {
     kind: "CSharpInfo";
-    binary: DerivedFile;       // the compiled assembly
-    refs: File[];              // direct references
-    deps: CSharpInfo[];        // dependencies
-    defaultInfo: DefaultInfo;  // files + runfiles
+    binary: File;             // the compiled assembly
+    refs: File[];             // direct references
+    deps: CSharpInfo[];       // dependencies
+    defaultInfo: DefaultInfo; // files + runfiles
 }
 ```
 
-Use `deps` to chain targets — transitive references are collected automatically:
+Use `deps` to chain targets — direct dependency outputs are passed as references automatically:
 
 ```typescript
-const lib = CSharp.csharp_library({ name: "Lib", srcs: ["Lib.cs"], ... });
-const app = CSharp.csharp_binary({ name: "App", srcs: ["Main.cs"], deps: [lib] });
-// App automatically gets Lib.dll as a reference
+const lib = CSharp.csharp_library({ name: "Lib", toolchain, srcs: ["Lib.cs"], ... });
+const app = CSharp.csharp_binary({ name: "App", toolchain, srcs: ["Main.cs"], deps: [lib], ... });
 ```
 
 ## Labels vs File References
 
 Rules accept two kinds of references:
 
-- **`refs: Label[]`** — string labels resolved by the framework. Use for workspace-local files:
-  ```typescript
-  refs: ["//artifacts/bin/System.Runtime/ref/Release/net11.0:System.Runtime.dll"]
-  ```
+- **`refs: Label[]`** — string labels resolved by the framework. Use for workspace-local files.
+- **`fileRefs: File[]`** — pre-resolved `File` objects. Use for files from downloaded SDKs, NuGet packages, or other resolvers.
 
-- **`fileRefs: File[]`** — pre-resolved `File` objects. Use for files from NuGet packages or other resolvers:
-  ```typescript
-  fileRefs: [importFrom("xunit.core").Contents.all.getFile(r`lib/netstandard1.1/xunit.core.dll`)]
-  ```
-
-Both are merged before compilation. The split exists because NuGet packages produce `File` objects that aren't workspace-relative paths.
+Both are merged before compilation.
 
 ## Analyzers and Source Generators
 
@@ -108,78 +153,51 @@ Pass Roslyn analyzer/source-generator DLLs via `analyzers`:
 ```typescript
 CSharp.csharp_binary({
     name: "MyTest",
+    toolchain: toolchain,
     srcs: ["Test.cs"],
-    analyzers: [mySourceGeneratorDll]  // passed as /analyzer: to csc
+    analyzers: [mySourceGeneratorDll],
+    fileRefs: [systemRuntime],
 });
 ```
 
-The analyzer runs during compilation and can inject generated source (e.g., a test runner `Main()` method).
+## Toolchain Helpers
 
-## Toolchain
+### csharpToolchain
 
-The C# SDK bundles its own .NET SDK and Roslyn compiler — no system install needed. Tools are located relative to the SDK package:
-
-```
-bxl_rules_csharp/
-├── sdk/
-│   ├── dotnet              — .NET host executable
-│   ├── host/               — .NET host libraries
-│   ├── shared/             — .NET shared framework
-│   └── roslyn/             — Roslyn compiler (csc.dll + dependencies)
-├── Rules.CSharp/
-│   ├── module.config.dsc
-│   └── csharpRules.dsc     — csharp_library, csharp_binary
-└── Managed/
-    ├── module.config.dsc
-    └── managed.dsc          — Sdk.Managed stub (for NuGet resolver)
-```
-
-To access the toolchain from a macro (e.g., a test runner that needs the dotnet host):
+Construct a toolchain from explicit files:
 
 ```typescript
-import * as CSharp from "Sdk.Rules.CSharp";
-
-const toolchain = CSharp.getDefaultToolchain();
-// toolchain.hostExe — the dotnet executable
-// toolchain.compiler — csc.dll
+const toolchain = CSharp.csharpToolchain({
+    hostExe: someDotnetFile,
+    compiler: someCscFile,
+});
 ```
 
-## Writing a Test Macro
+### csharpToolchainFromContents
 
-A common pattern is writing a repo-specific test macro that wraps `csharp_binary` with baked-in dependencies. Here's the pattern:
+Construct a toolchain from an extracted SDK/archive:
 
 ```typescript
-import * as CSharp from "Sdk.Rules.CSharp";
-import * as Defs from "Defs";
-
-export function my_test(args: { name: string, srcs: Label[] }) {
-    // Labels pass through — the rule resolves them
-    const testBinary = CSharp.csharp_binary({
-        name: args.name,
-        srcs: args.srcs,
-        refs: Defs.COMMON_REFS,          // label-based refs
-        fileRefs: Defs.NUGET_REFS,       // NuGet file refs
-        analyzers: [Defs.TEST_GENERATOR]  // source generator
-    });
-
-    // Run the test...
-    return testBinary;
-}
+const toolchain = CSharp.csharpToolchainFromContents({
+    contents: importFrom("DotNetSdk").extracted,
+    hostPath: "dotnet",
+    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
+});
 ```
 
-The macro never calls label resolution — it passes labels straight through to the rule.
+This keeps the repo shippable: the SDK is downloaded by the consuming workspace instead of being checked into `bxl_rules_csharp`.
 
 ## Compiler Flags
 
-The SDK always passes these csc flags (matching Bazel's rules_dotnet):
+The SDK always passes these csc flags:
 
-- `/noconfig` — don't use default response file
-- `/nostdlib+` — don't auto-reference mscorlib
-- `/deterministic+` — reproducible builds
-- `/utf8output` — UTF-8 console output
-- `/nologo` — suppress banner
+- `/noconfig`
+- `/nostdlib+`
+- `/deterministic+`
+- `/utf8output`
+- `/nologo`
 
 ## Related
 
-- **[bxl_rules](../bxl_rules/)** — The base rules framework this SDK is built on
+- **[bxl_rules](https://github.com/agocke/bxl_rules)** — The base rules framework this SDK is built on
 - **[rules_dotnet](https://github.com/nicholasgasior/rules_dotnet)** — The Bazel C# rules that inspired this SDK
