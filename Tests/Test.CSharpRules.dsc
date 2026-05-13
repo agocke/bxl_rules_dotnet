@@ -2,8 +2,12 @@
 // Licensed under the MIT License.
 
 import * as CSharp from "Sdk.Rules.CSharp";
+import * as Rules from "Sdk.Rules";
+import {Cmd} from "Sdk.Transformers";
 
 const dotnetSdk = importFrom("DotNetSdk").extracted;
+const targetFramework = "net10.0";
+const runtimeVersion = "10.0.5";
 
 const toolchain = CSharp.csharpToolchainFromContents({
     name: "downloaded-dotnet-sdk",
@@ -13,7 +17,11 @@ const toolchain = CSharp.csharpToolchainFromContents({
 });
 
 const systemRuntime = dotnetSdk.assertExistence(
-    r`packs/Microsoft.NETCore.App.Ref/10.0.5/ref/net10.0/System.Runtime.dll`
+    r`packs/Microsoft.NETCore.App.Ref/${runtimeVersion}/ref/${targetFramework}/System.Runtime.dll`
+);
+
+const systemIoFileSystem = dotnetSdk.assertExistence(
+    r`packs/Microsoft.NETCore.App.Ref/${runtimeVersion}/ref/${targetFramework}/System.IO.FileSystem.dll`
 );
 
 function test_explicitToolchain_buildsLibraryGraph(): string {
@@ -34,4 +42,80 @@ function test_explicitToolchain_buildsLibraryGraph(): string {
     return "ok";
 }
 
+interface RunManagedBinaryAttrs {
+    name: string;
+    binary: CSharp.CSharpInfo;
+    toolchain: CSharp.CSharpToolchain;
+}
+
+interface RunManagedBinaryResult extends Rules.DefaultInfo {
+    outputFile: File;
+}
+
+function runManagedBinary(args: RunManagedBinaryAttrs): RunManagedBinaryResult {
+    return Rules.rule<RunManagedBinaryAttrs, RunManagedBinaryAttrs, CSharp.CSharpToolchain, RunManagedBinaryResult>({
+        doc: "Run a managed binary with dotnet exec and capture its output file.",
+        toolchain: args.toolchain,
+        resolve: (attrs, _resolver) => attrs,
+        impl: (ctx) => {
+            const runtimeConfig = ctx.actions.writeFile(
+                ctx.actions.declareOutput(ctx.args.name + ".runtimeconfig.json"),
+                [
+                    "{",
+                    "  \"runtimeOptions\": {",
+                    `    \"tfm\": \"${targetFramework}\",`,
+                    "    \"framework\": {",
+                    "      \"name\": \"Microsoft.NETCore.App\",",
+                    `      \"version\": \"${runtimeVersion}\"`,
+                    "    }",
+                    "  }",
+                    "}",
+                ]
+            );
+
+            const output = ctx.actions.declareOutput("binary-integration-output.txt");
+            const produced = ctx.actions.run({
+                tool: ctx.toolchain.hostExe,
+                arguments: [
+                    Cmd.argument("exec"),
+                    Cmd.argument("--runtimeconfig"),
+                    Cmd.argument(Rules.cmdInput(runtimeConfig)),
+                    Cmd.argument(Rules.cmdInput(Rules.sourceArtifact(ctx.args.binary.binary))),
+                    Cmd.argument(Rules.cmdOutput(output)),
+                ],
+                outputs: [output],
+                description: `run managed binary: ${ctx.args.name}`,
+            });
+
+            const outputFile = Rules.getFile(produced[0]);
+            return {
+                kind: "DefaultInfo",
+                files: [outputFile],
+                outputFile: outputFile,
+            };
+        },
+    })(args);
+}
+
+function test_explicitToolchain_buildsAndRunsBinary(): string {
+    const app = CSharp.csharp_binary({
+        name: "ToolchainBinarySmokeTest",
+        toolchain: toolchain,
+        srcs: ["src/TestProgram.cs"],
+        fileRefs: [systemRuntime, systemIoFileSystem],
+    });
+
+    const result = runManagedBinary({
+        name: "ToolchainBinaryRun",
+        binary: app,
+        toolchain: toolchain,
+    });
+
+    Contract.assert(app.binary !== undefined, "csharp_binary must surface the compiled binary");
+    Contract.assert(result.outputFile !== undefined, "running the binary must surface the captured output file");
+
+    return "ok";
+}
+
 @@public export const r01 = test_explicitToolchain_buildsLibraryGraph();
+@@public export const r02 = test_explicitToolchain_buildsAndRunsBinary();

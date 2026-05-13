@@ -64,8 +64,37 @@ export BUILDXL_BIN="$BXL_BIN_HINT"
 echo "BUILDXL_BIN = $BUILDXL_BIN"
 
 CONFIG_FILE="config.dsc"
+PHASE_SPECIFIED=0
+
+for arg in "$@"; do
+    if [[ "$arg" == /phase:* ]]; then
+        PHASE_SPECIFIED=1
+        break
+    fi
+done
 
 echo "Running bxl on $REPO_ROOT/$CONFIG_FILE ..."
 
 cd "$REPO_ROOT"
-"$BXL_CMD" /c:"$CONFIG_FILE" /phase:Schedule /sandboxKind:None /enableLinuxEBPFSandbox- "$@"
+"$BXL_CMD" /c:"$CONFIG_FILE" /sandboxKind:None /enableLinuxEBPFSandbox- "$@"
+
+if [[ "$PHASE_SPECIFIED" -eq 0 ]]; then
+    mapfile -t RESULT_CANDIDATES < <(find "$REPO_ROOT/Out" -type f -name "binary-integration-output.txt" 2>/dev/null)
+    if [[ "${#RESULT_CANDIDATES[@]}" -eq 0 ]]; then
+        echo "ERROR: did not find the integration-test output file." >&2
+        exit 1
+    fi
+
+    RESULT_FILE="$(ls -t "${RESULT_CANDIDATES[@]}" | head -1)"
+    EXPECTED_OUTPUT="Hello from CSharp integration test"
+    ACTUAL_OUTPUT="$(cat "$RESULT_FILE")"
+
+    if [[ "$ACTUAL_OUTPUT" != "$EXPECTED_OUTPUT" ]]; then
+        echo "ERROR: integration-test output mismatch in $RESULT_FILE" >&2
+        echo "expected: $EXPECTED_OUTPUT" >&2
+        echo "actual:   $ACTUAL_OUTPUT" >&2
+        exit 1
+    fi
+
+    echo "Validated integration-test output: $ACTUAL_OUTPUT"
+fi
