@@ -34,11 +34,9 @@ config({
 });
 ```
 
-The example above uses the Linux x64 SDK archive. Swap the URL and `sdkVersion` for the host RID / SDK you want to support.
+The example above uses the Linux x64 SDK archive. Swap the URL and `compilerPath` for the host RID you want to support.
 
 Third-party workspaces that use both `bxl_rules` and `bxl_rules_csharp` should declare both: `bxl_rules` via `GitRepository` (or another resolver of their choice) and this repo as a normal DScript root/module.
-
-For local paired changes across both repos, set `BXL_RULES_ROOT=/path/to/bxl_rules` before running `./run-tests.sh`; the script will switch to `config.local-deps.dsc` and load `Sdk.Rules` from that checkout.
 
 ### 2. Construct a toolchain from the downloaded SDK
 
@@ -47,14 +45,15 @@ import * as CSharp from "Sdk.Rules.CSharp";
 
 const dotnetSdk = importFrom("DotNetSdk").extracted;
 
-const toolchain = CSharp.csharpToolchainFromDotNetSdk({
+const toolchain = CSharp.csharpToolchainFromContents({
     name: "dotnet-sdk",
     contents: dotnetSdk,
-    sdkVersion: "10.0.201",
+    hostPath: "dotnet",
+    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
 });
 ```
 
-This helper resolves `dotnet`, `sdk/<ver>/Roslyn/bincore/csc.dll`, and the full `sdk/<ver>/Roslyn/bincore` payload so sandboxed builds see the complete Roslyn toolchain.
+You can also build a toolchain from explicit `File`s with `CSharp.csharpToolchain({ compiler, hostExe })` if your workspace acquires the host/compiler some other way.
 
 ### 3. Write a BUILD.dsc
 
@@ -62,9 +61,9 @@ This helper resolves `dotnet`, `sdk/<ver>/Roslyn/bincore/csc.dll`, and the full 
 import * as CSharp from "Sdk.Rules.CSharp";
 
 const dotnetSdk = importFrom("DotNetSdk").extracted;
-const toolchain = CSharp.csharpToolchainFromDotNetSdk({
+const toolchain = CSharp.csharpToolchainFromContents({
     contents: dotnetSdk,
-    sdkVersion: "10.0.201",
+    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
 });
 
 const systemRuntime = dotnetSdk.getFile(
@@ -76,7 +75,7 @@ export const myLib = CSharp.csharp_library({
     name: "MyLib",
     toolchain: toolchain,
     srcs: ["Foo.cs", "Bar.cs"],
-    refs: [CSharp.fileLabel(systemRuntime)],
+    fileRefs: [systemRuntime],
 });
 
 @@public
@@ -84,7 +83,7 @@ export const myApp = CSharp.csharp_binary({
     name: "MyApp",
     toolchain: toolchain,
     srcs: ["Program.cs"],
-    refs: [CSharp.fileLabel(systemRuntime)],
+    fileRefs: [systemRuntime],
     deps: [myLib],
 });
 ```
@@ -100,9 +99,10 @@ Compiles a C# class library (DLL).
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `name` | `string` | required | Assembly name (becomes `{name}.dll`) |
-| `toolchain` | `CSharpToolchain` | required | Toolchain that provides `dotnet`, `csc.dll`, and any compiler sidecar payload |
+| `toolchain` | `CSharpToolchain` | required | Toolchain that provides `dotnet` and `csc.dll` |
 | `srcs` | `Label[]` | required | C# source file labels |
-| `refs` | `CSharpRef[]` | `[]` | Assembly references, either workspace labels or `CSharp.fileLabel(...)` wrappers for external files |
+| `refs` | `Label[]` | `[]` | Assembly reference labels (resolved to files) |
+| `fileRefs` | `File[]` | `[]` | Pre-resolved assembly references (e.g. from downloads or NuGet) |
 | `deps` | `CSharpInfo[]` | `[]` | Dependencies on other C# targets |
 | `optimize` | `boolean` | `false` | Enable compiler optimizations |
 | `allowUnsafe` | `boolean` | `false` | Allow unsafe code blocks |
@@ -137,12 +137,14 @@ const lib = CSharp.csharp_library({ name: "Lib", toolchain, srcs: ["Lib.cs"], ..
 const app = CSharp.csharp_binary({ name: "App", toolchain, srcs: ["Main.cs"], deps: [lib], ... });
 ```
 
-## References
+## Labels vs File References
 
-Use `refs` for all assembly references:
+Rules accept two kinds of references:
 
-- **`"//pkg:File.dll"`** — a normal workspace label
-- **`CSharp.fileLabel(file)`** — wrap an externally acquired `File` so it still flows through the label-based `refs` field
+- **`refs: Label[]`** — string labels resolved by the framework. Use for workspace-local files.
+- **`fileRefs: File[]`** — pre-resolved `File` objects. Use for files from downloaded SDKs, NuGet packages, or other resolvers.
+
+Both are merged before compilation.
 
 ## Analyzers and Source Generators
 
@@ -154,24 +156,36 @@ CSharp.csharp_binary({
     toolchain: toolchain,
     srcs: ["Test.cs"],
     analyzers: [mySourceGeneratorDll],
-    refs: [CSharp.fileLabel(systemRuntime)],
+    fileRefs: [systemRuntime],
 });
 ```
 
 ## Toolchain Helpers
 
-### csharpToolchainFromDotNetSdk
+### csharpToolchain
 
-Construct a toolchain from an extracted .NET SDK:
+Construct a toolchain from explicit files:
 
 ```typescript
-const toolchain = CSharp.csharpToolchainFromDotNetSdk({
-    contents: importFrom("DotNetSdk").extracted,
-    sdkVersion: "10.0.201",
+const toolchain = CSharp.csharpToolchain({
+    hostExe: someDotnetFile,
+    compiler: someCscFile,
 });
 ```
 
-This keeps the repo shippable: the SDK is downloaded by the consuming workspace instead of being checked into `bxl_rules_csharp`. The helper also brings along the full `sdk/<ver>/Roslyn/bincore` directory so Roslyn sidecar DLLs are declared as tool inputs.
+### csharpToolchainFromContents
+
+Construct a toolchain from an extracted SDK/archive:
+
+```typescript
+const toolchain = CSharp.csharpToolchainFromContents({
+    contents: importFrom("DotNetSdk").extracted,
+    hostPath: "dotnet",
+    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
+});
+```
+
+This keeps the repo shippable: the SDK is downloaded by the consuming workspace instead of being checked into `bxl_rules_csharp`.
 
 ## Compiler Flags
 

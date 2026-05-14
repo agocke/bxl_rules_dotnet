@@ -12,16 +12,16 @@
  * Usage:
  *   import * as CSharp from "Sdk.Rules.CSharp";
  *
- *   const toolchain = CSharp.csharpToolchainFromDotNetSdk({
- *       contents: importFrom("DotNetSdk").extracted,
- *       sdkVersion: "10.0.201",
+ *   const toolchain = CSharp.csharpToolchain({
+ *       hostExe: f`/path/to/dotnet`,
+ *       compiler: f`/path/to/csc.dll`,
  *   });
  *
  *   const myLib = CSharp.csharp_library({
  *       name: "MyLib",
  *       toolchain: toolchain,
  *       srcs: globR(d`.`, "*.cs"),
- *       refs: ["//path/to/pkg:Dependency.dll"],
+ *       fileRefs: [f`path/to/Dependency.dll`],
  *   });
  */
 
@@ -38,91 +38,49 @@ import {Cmd} from "Sdk.Transformers";
 
 @@public
 export interface CSharpToolchain extends Rules.Toolchain {
-    /** Tagged-interface brand. Do not set or read. */
-    __csharpToolchainBrand: any;
-
     /** The Roslyn csc.dll to invoke. */
     compiler: File;
 
     /** The dotnet host executable (runs csc.dll). */
     hostExe: File;
-
-    /** Additional compiler payload files that must be present beside csc.dll (for example Roslyn/bincore/**). */
-    compilerPayload: File[];
 }
 
-function createCSharpToolchain(args: {
-    name?: string,
-    compiler: File,
-    hostExe: File,
-    compilerPayload: File[],
-}): CSharpToolchain {
+/**
+ * Create a CSharpToolchain from files.
+ */
+@@public
+export function csharpToolchain(args: { name?: string, compiler: File, hostExe: File }): CSharpToolchain {
     return {
-        __csharpToolchainBrand: undefined,
         kind: "CSharpToolchain",
         name: args.name || "csharp_toolchain",
         compiler: args.compiler,
-        hostExe: args.hostExe,
-        compilerPayload: args.compilerPayload,
+        hostExe: args.hostExe
     };
 }
 
-function createCSharpToolchainFromContents(args: {
+/**
+ * Create a CSharpToolchain from the contents of an extracted SDK/archive.
+ *
+ * This is the common path when a workspace acquires the .NET SDK with
+ * BuildXL's Download resolver and wants to pass the resulting content to
+ * these rules.
+ */
+@@public
+export function csharpToolchainFromContents(args: {
     name?: string,
     contents: StaticDirectory,
     compilerPath: string,
-    compilerPayloadPath: string,
+    hostPath?: string,
 }): CSharpToolchain {
-    return createCSharpToolchain({
+    return csharpToolchain({
         name: args.name || "csharp_toolchain",
         compiler: findFileInContents(args.contents, args.compilerPath),
-        hostExe: findFileInContents(args.contents, "dotnet"),
-        compilerPayload: findFilesInContents(
-            args.contents,
-            args.compilerPayloadPath
-        ),
+        hostExe: findFileInContents(args.contents, args.hostPath || "dotnet"),
     });
 }
 
 function findFileInContents(contents: StaticDirectory, path: string): File {
     return contents.assertExistence(r`${path}`);
-}
-
-function findFilesInContents(contents: StaticDirectory, path: string): File[] {
-    const directoryRoot = d`${contents.root}/${r`${path}`}`;
-    const literalFiles = globR(directoryRoot, "*");
-    Contract.assert(literalFiles.length > 0,
-        `expected directory "${path}" to exist in extracted contents`);
-    const directoryRootString = directoryRoot.toDiagnosticString();
-    return literalFiles.map(file => {
-        const filePath = file.path.toDiagnosticString();
-        const prefix = `${directoryRootString}/`;
-        Contract.assert(filePath.startsWith(prefix),
-            `expected "${filePath}" to be within "${directoryRootString}"`);
-        const relativePath = filePath.slice(prefix.length);
-        return contents.assertExistence(r`${path}/${relativePath}`);
-    });
-}
-
-/**
- * Create a CSharpToolchain from an extracted .NET SDK.
- *
- * Resolves the `dotnet` host, `sdk/<ver>/Roslyn/bincore/csc.dll`, and the
- * full `sdk/<ver>/Roslyn/bincore` directory payload required by Roslyn.
- */
-@@public
-export function csharpToolchainFromDotNetSdk(args: {
-    name?: string,
-    contents: StaticDirectory,
-    sdkVersion: string,
-}): CSharpToolchain {
-    const roslynBincorePath = `sdk/${args.sdkVersion}/Roslyn/bincore`;
-    return createCSharpToolchainFromContents({
-        name: args.name || "csharp_toolchain",
-        contents: args.contents,
-        compilerPath: `${roslynBincorePath}/csc.dll`,
-        compilerPayloadPath: roslynBincorePath,
-    });
 }
 
 // ============================================================================
@@ -148,31 +106,6 @@ export interface CSharpInfo extends Rules.Provider {
     defaultInfo: Rules.DefaultInfo;
 }
 
-/**
- * Label wrapper for externally acquired files that do not already have a
- * workspace-local string label.
- */
-@@public
-export interface ExternalLabel {
-    __csharpExternalLabelBrand: any;
-    kind: "CSharpExternalLabel";
-    file: File;
-}
-
-/** A C# reference is either a normal workspace label or an external file label. */
-@@public
-export type CSharpRef = Rules.Label | ExternalLabel;
-
-/** Wrap an externally acquired file so it can flow through the label-based `refs` field. */
-@@public
-export function fileLabel(file: File): ExternalLabel {
-    return {
-        __csharpExternalLabelBrand: undefined,
-        kind: "CSharpExternalLabel",
-        file: file,
-    };
-}
-
 // ============================================================================
 //  Caller-facing attributes (labels)
 // ============================================================================
@@ -186,7 +119,13 @@ export interface CSharpCommonAttrs {
     srcs: Rules.Label[];
 
     /** Assembly reference labels (resolved by the rule). */
-    refs?: CSharpRef[];
+    refs?: Rules.Label[];
+
+    /**
+     * Pre-resolved assembly references (e.g., from NuGet importFrom).
+     * Prefer using `@pkg` labels with `externalPackages` instead.
+     */
+    fileRefs?: File[];
 
     /** Dependencies on other C# targets built by this SDK. */
     deps?: CSharpInfo[];
@@ -214,6 +153,12 @@ export interface CSharpCommonAttrs {
 
     /** Toolchain to use for this target. */
     toolchain: CSharpToolchain;
+
+    /**
+     * External packages for `@pkg//path:file` label resolution.
+     * Keys are package names; values are StaticDirectory contents.
+     */
+    externalPackages?: Map<string, StaticDirectory>;
 }
 
 // ============================================================================
@@ -240,11 +185,11 @@ interface CSharpResolvedAttrs {
  * the framework which fields are labels and how to resolve them.
  */
 function resolveCSharpAttrs(attrs: CSharpCommonAttrs, resolver: Rules.LabelResolver): CSharpResolvedAttrs {
-    const refFiles = attrs.refs ? attrs.refs.map(r => resolveCSharpRef(r, resolver)) : [];
+    const refFiles = attrs.refs ? resolver.resolveAll(attrs.refs) : [];
     return {
         name: attrs.name,
         srcs: resolver.resolveAll(attrs.srcs),
-        refs: refFiles,
+        refs: [...refFiles, ...(attrs.fileRefs || []).map(f => Rules.sourceArtifact(f))],
         deps: attrs.deps || [],
         optimize: attrs.optimize || false,
         allowUnsafe: attrs.allowUnsafe || false,
@@ -254,12 +199,6 @@ function resolveCSharpAttrs(attrs: CSharpCommonAttrs, resolver: Rules.LabelResol
         compilerOptions: attrs.compilerOptions || [],
         analyzers: (attrs.analyzers || []).map(f => Rules.sourceArtifact(f))
     };
-}
-
-function resolveCSharpRef(reference: CSharpRef, resolver: Rules.LabelResolver): Rules.SourceArtifact {
-    return typeof reference === "string"
-        ? resolver.resolve(reference)
-        : Rules.sourceArtifact(reference.file);
 }
 
 // ============================================================================
@@ -279,6 +218,7 @@ function createCSharpRule<TAttrs extends CSharpCommonAttrs>(doc: string, targetT
     return (args: TAttrs) => Rules.rule<TAttrs, CSharpResolvedAttrs, CSharpToolchain, CSharpInfo>({
         doc: doc,
         toolchain: args.toolchain,
+        externalPackages: args.externalPackages,
         resolve: resolveCSharpAttrs,
         impl: (ctx) => compileImpl(ctx.actions, ctx.args, ctx.toolchain, targetType)
     })(args);
@@ -350,7 +290,6 @@ function compileImpl(actions: Rules.Actions, args: CSharpResolvedAttrs, toolchai
         tool: toolchain.hostExe,
         arguments: cscArgs,
         outputs: [outDll],
-        dependencies: toolchain.compilerPayload.map(f => Rules.sourceArtifact(f)),
         description: `csc [${targetType}]: ${args.name}`
     });
 
