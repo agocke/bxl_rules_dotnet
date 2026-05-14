@@ -64,6 +64,9 @@ export BUILDXL_BIN="$BXL_BIN_HINT"
 echo "BUILDXL_BIN = $BUILDXL_BIN"
 
 CONFIG_FILE="config.dsc"
+if [[ -n "${BXL_RULES_ROOT:-}" ]]; then
+    CONFIG_FILE="config.local-deps.dsc"
+fi
 PHASE_SPECIFIED=0
 
 for arg in "$@"; do

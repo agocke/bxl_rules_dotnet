@@ -12,9 +12,9 @@
  * Usage:
  *   import * as CSharp from "Sdk.Rules.CSharp";
  *
- *   const toolchain = CSharp.csharpToolchain({
- *       hostExe: f`/path/to/dotnet`,
- *       compiler: f`/path/to/csc.dll`,
+ *   const toolchain = CSharp.csharpToolchainFromDotNetSdk({
+ *       contents: importFrom("DotNetSdk").extracted,
+ *       sdkVersion: "10.0.201",
  *   });
  *
  *   const myLib = CSharp.csharp_library({
@@ -38,49 +38,91 @@ import {Cmd} from "Sdk.Transformers";
 
 @@public
 export interface CSharpToolchain extends Rules.Toolchain {
+    /** Tagged-interface brand. Do not set or read. */
+    __csharpToolchainBrand: any;
+
     /** The Roslyn csc.dll to invoke. */
     compiler: File;
 
     /** The dotnet host executable (runs csc.dll). */
     hostExe: File;
+
+    /** Additional compiler payload files that must be present beside csc.dll (for example Roslyn/bincore/**). */
+    compilerPayload: File[];
 }
 
-/**
- * Create a CSharpToolchain from files.
- */
-@@public
-export function csharpToolchain(args: { name?: string, compiler: File, hostExe: File }): CSharpToolchain {
+function createCSharpToolchain(args: {
+    name?: string,
+    compiler: File,
+    hostExe: File,
+    compilerPayload: File[],
+}): CSharpToolchain {
     return {
+        __csharpToolchainBrand: undefined,
         kind: "CSharpToolchain",
         name: args.name || "csharp_toolchain",
         compiler: args.compiler,
-        hostExe: args.hostExe
+        hostExe: args.hostExe,
+        compilerPayload: args.compilerPayload,
     };
 }
 
-/**
- * Create a CSharpToolchain from the contents of an extracted SDK/archive.
- *
- * This is the common path when a workspace acquires the .NET SDK with
- * BuildXL's Download resolver and wants to pass the resulting content to
- * these rules.
- */
-@@public
-export function csharpToolchainFromContents(args: {
+function createCSharpToolchainFromContents(args: {
     name?: string,
     contents: StaticDirectory,
     compilerPath: string,
-    hostPath?: string,
+    compilerPayloadPath: string,
 }): CSharpToolchain {
-    return csharpToolchain({
+    return createCSharpToolchain({
         name: args.name || "csharp_toolchain",
         compiler: findFileInContents(args.contents, args.compilerPath),
-        hostExe: findFileInContents(args.contents, args.hostPath || "dotnet"),
+        hostExe: findFileInContents(args.contents, "dotnet"),
+        compilerPayload: findFilesInContents(
+            args.contents,
+            args.compilerPayloadPath
+        ),
     });
 }
 
 function findFileInContents(contents: StaticDirectory, path: string): File {
     return contents.assertExistence(r`${path}`);
+}
+
+function findFilesInContents(contents: StaticDirectory, path: string): File[] {
+    const directoryRoot = d`${contents.root}/${r`${path}`}`;
+    const literalFiles = globR(directoryRoot, "*");
+    Contract.assert(literalFiles.length > 0,
+        `expected directory "${path}" to exist in extracted contents`);
+    const directoryRootString = directoryRoot.toDiagnosticString();
+    return literalFiles.map(file => {
+        const filePath = file.path.toDiagnosticString();
+        const prefix = `${directoryRootString}/`;
+        Contract.assert(filePath.startsWith(prefix),
+            `expected "${filePath}" to be within "${directoryRootString}"`);
+        const relativePath = filePath.slice(prefix.length);
+        return contents.assertExistence(r`${path}/${relativePath}`);
+    });
+}
+
+/**
+ * Create a CSharpToolchain from an extracted .NET SDK.
+ *
+ * Resolves the `dotnet` host, `sdk/<ver>/Roslyn/bincore/csc.dll`, and the
+ * full `sdk/<ver>/Roslyn/bincore` directory payload required by Roslyn.
+ */
+@@public
+export function csharpToolchainFromDotNetSdk(args: {
+    name?: string,
+    contents: StaticDirectory,
+    sdkVersion: string,
+}): CSharpToolchain {
+    const roslynBincorePath = `sdk/${args.sdkVersion}/Roslyn/bincore`;
+    return createCSharpToolchainFromContents({
+        name: args.name || "csharp_toolchain",
+        contents: args.contents,
+        compilerPath: `${roslynBincorePath}/csc.dll`,
+        compilerPayloadPath: roslynBincorePath,
+    });
 }
 
 // ============================================================================
@@ -280,6 +322,7 @@ function compileImpl(actions: Rules.Actions, args: CSharpResolvedAttrs, toolchai
         tool: toolchain.hostExe,
         arguments: cscArgs,
         outputs: [outDll],
+        dependencies: toolchain.compilerPayload.map(f => Rules.sourceArtifact(f)),
         description: `csc [${targetType}]: ${args.name}`
     });
 

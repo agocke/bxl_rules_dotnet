@@ -8,12 +8,12 @@ import {Cmd} from "Sdk.Transformers";
 const dotnetSdk = importFrom("DotNetSdk").extracted;
 const targetFramework = "net10.0";
 const runtimeVersion = "10.0.5";
+const sdkVersion = "10.0.201";
 
-const toolchain = CSharp.csharpToolchainFromContents({
+const toolchain = CSharp.csharpToolchainFromDotNetSdk({
     name: "downloaded-dotnet-sdk",
     contents: dotnetSdk,
-    hostPath: "dotnet",
-    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
+    sdkVersion: sdkVersion,
 });
 
 const systemRuntime = dotnetSdk.assertExistence(
@@ -24,7 +24,7 @@ const systemIoFileSystem = dotnetSdk.assertExistence(
     r`packs/Microsoft.NETCore.App.Ref/${runtimeVersion}/ref/${targetFramework}/System.IO.FileSystem.dll`
 );
 
-function test_explicitToolchain_buildsLibraryGraph(): string {
+function test_sdkToolchain_buildsLibraryGraph(): string {
     const lib = CSharp.csharp_library({
         name: "ToolchainSmokeTest",
         toolchain: toolchain,
@@ -38,6 +38,8 @@ function test_explicitToolchain_buildsLibraryGraph(): string {
     Contract.assert(lib.defaultInfo.files.length === 1, "DefaultInfo.files must contain the binary");
     Contract.assert(lib.defaultInfo.runfiles !== undefined, "runfiles should be populated");
     Contract.assert(lib.defaultInfo.runfiles.length >= 2, "runfiles should include the binary and direct refs");
+    Contract.assert(toolchain.compilerPayload !== undefined, "toolchain helper should surface the Roslyn payload files");
+    Contract.assert(toolchain.compilerPayload.length > 1, "Roslyn payload should contain csc sidecar files");
 
     return "ok";
 }
@@ -97,7 +99,7 @@ function runManagedBinary(args: RunManagedBinaryAttrs): RunManagedBinaryResult {
     })(args);
 }
 
-function test_explicitToolchain_buildsAndRunsBinary(): string {
+function test_sdkToolchain_buildsAndRunsBinary(): string {
     const app = CSharp.csharp_binary({
         name: "ToolchainBinarySmokeTest",
         toolchain: toolchain,
@@ -117,5 +119,5 @@ function test_explicitToolchain_buildsAndRunsBinary(): string {
     return "ok";
 }
 
-@@public export const r01 = test_explicitToolchain_buildsLibraryGraph();
-@@public export const r02 = test_explicitToolchain_buildsAndRunsBinary();
+@@public export const r01 = test_sdkToolchain_buildsLibraryGraph();
+@@public export const r02 = test_sdkToolchain_buildsAndRunsBinary();

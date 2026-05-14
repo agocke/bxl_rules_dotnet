@@ -34,9 +34,11 @@ config({
 });
 ```
 
-The example above uses the Linux x64 SDK archive. Swap the URL and `compilerPath` for the host RID you want to support.
+The example above uses the Linux x64 SDK archive. Swap the URL and `sdkVersion` for the host RID / SDK you want to support.
 
 Third-party workspaces that use both `bxl_rules` and `bxl_rules_csharp` should declare both: `bxl_rules` via `GitRepository` (or another resolver of their choice) and this repo as a normal DScript root/module.
+
+For local paired changes across both repos, set `BXL_RULES_ROOT=/path/to/bxl_rules` before running `./run-tests.sh`; the script will switch to `config.local-deps.dsc` and load `Sdk.Rules` from that checkout.
 
 ### 2. Construct a toolchain from the downloaded SDK
 
@@ -45,15 +47,14 @@ import * as CSharp from "Sdk.Rules.CSharp";
 
 const dotnetSdk = importFrom("DotNetSdk").extracted;
 
-const toolchain = CSharp.csharpToolchainFromContents({
+const toolchain = CSharp.csharpToolchainFromDotNetSdk({
     name: "dotnet-sdk",
     contents: dotnetSdk,
-    hostPath: "dotnet",
-    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
+    sdkVersion: "10.0.201",
 });
 ```
 
-You can also build a toolchain from explicit `File`s with `CSharp.csharpToolchain({ compiler, hostExe })` if your workspace acquires the host/compiler some other way.
+This helper resolves `dotnet`, `sdk/<ver>/Roslyn/bincore/csc.dll`, and the full `sdk/<ver>/Roslyn/bincore` payload so sandboxed builds see the complete Roslyn toolchain.
 
 ### 3. Write a BUILD.dsc
 
@@ -61,9 +62,9 @@ You can also build a toolchain from explicit `File`s with `CSharp.csharpToolchai
 import * as CSharp from "Sdk.Rules.CSharp";
 
 const dotnetSdk = importFrom("DotNetSdk").extracted;
-const toolchain = CSharp.csharpToolchainFromContents({
+const toolchain = CSharp.csharpToolchainFromDotNetSdk({
     contents: dotnetSdk,
-    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
+    sdkVersion: "10.0.201",
 });
 
 const systemRuntime = dotnetSdk.getFile(
@@ -99,7 +100,7 @@ Compiles a C# class library (DLL).
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `name` | `string` | required | Assembly name (becomes `{name}.dll`) |
-| `toolchain` | `CSharpToolchain` | required | Toolchain that provides `dotnet` and `csc.dll` |
+| `toolchain` | `CSharpToolchain` | required | Toolchain that provides `dotnet`, `csc.dll`, and any compiler sidecar payload |
 | `srcs` | `Label[]` | required | C# source file labels |
 | `refs` | `Label[]` | `[]` | Assembly reference labels (resolved to files) |
 | `fileRefs` | `File[]` | `[]` | Pre-resolved assembly references (e.g. from downloads or NuGet) |
@@ -162,30 +163,18 @@ CSharp.csharp_binary({
 
 ## Toolchain Helpers
 
-### csharpToolchain
+### csharpToolchainFromDotNetSdk
 
-Construct a toolchain from explicit files:
-
-```typescript
-const toolchain = CSharp.csharpToolchain({
-    hostExe: someDotnetFile,
-    compiler: someCscFile,
-});
-```
-
-### csharpToolchainFromContents
-
-Construct a toolchain from an extracted SDK/archive:
+Construct a toolchain from an extracted .NET SDK:
 
 ```typescript
-const toolchain = CSharp.csharpToolchainFromContents({
+const toolchain = CSharp.csharpToolchainFromDotNetSdk({
     contents: importFrom("DotNetSdk").extracted,
-    hostPath: "dotnet",
-    compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
+    sdkVersion: "10.0.201",
 });
 ```
 
-This keeps the repo shippable: the SDK is downloaded by the consuming workspace instead of being checked into `bxl_rules_csharp`.
+This keeps the repo shippable: the SDK is downloaded by the consuming workspace instead of being checked into `bxl_rules_csharp`. The helper also brings along the full `sdk/<ver>/Roslyn/bincore` directory so Roslyn sidecar DLLs are declared as tool inputs.
 
 ## Compiler Flags
 
