@@ -21,7 +21,7 @@
  *       name: "MyLib",
  *       toolchain: toolchain,
  *       srcs: globR(d`.`, "*.cs"),
- *       fileRefs: [f`path/to/Dependency.dll`],
+ *       refs: ["//path/to/pkg:Dependency.dll"],
  *   });
  */
 
@@ -148,6 +148,31 @@ export interface CSharpInfo extends Rules.Provider {
     defaultInfo: Rules.DefaultInfo;
 }
 
+/**
+ * Label wrapper for externally acquired files that do not already have a
+ * workspace-local string label.
+ */
+@@public
+export interface ExternalLabel {
+    __csharpExternalLabelBrand: any;
+    kind: "CSharpExternalLabel";
+    file: File;
+}
+
+/** A C# reference is either a normal workspace label or an external file label. */
+@@public
+export type CSharpRef = Rules.Label | ExternalLabel;
+
+/** Wrap an externally acquired file so it can flow through the label-based `refs` field. */
+@@public
+export function fileLabel(file: File): ExternalLabel {
+    return {
+        __csharpExternalLabelBrand: undefined,
+        kind: "CSharpExternalLabel",
+        file: file,
+    };
+}
+
 // ============================================================================
 //  Caller-facing attributes (labels)
 // ============================================================================
@@ -161,10 +186,7 @@ export interface CSharpCommonAttrs {
     srcs: Rules.Label[];
 
     /** Assembly reference labels (resolved by the rule). */
-    refs?: Rules.Label[];
-
-    /** Pre-resolved assembly references (e.g., from NuGet importFrom). */
-    fileRefs?: File[];
+    refs?: CSharpRef[];
 
     /** Dependencies on other C# targets built by this SDK. */
     deps?: CSharpInfo[];
@@ -218,11 +240,11 @@ interface CSharpResolvedAttrs {
  * the framework which fields are labels and how to resolve them.
  */
 function resolveCSharpAttrs(attrs: CSharpCommonAttrs, resolver: Rules.LabelResolver): CSharpResolvedAttrs {
-    const refFiles = attrs.refs ? resolver.resolveAll(attrs.refs) : [];
+    const refFiles = attrs.refs ? attrs.refs.map(r => resolveCSharpRef(r, resolver)) : [];
     return {
         name: attrs.name,
         srcs: resolver.resolveAll(attrs.srcs),
-        refs: [...refFiles, ...(attrs.fileRefs || []).map(f => Rules.sourceArtifact(f))],
+        refs: refFiles,
         deps: attrs.deps || [],
         optimize: attrs.optimize || false,
         allowUnsafe: attrs.allowUnsafe || false,
@@ -232,6 +254,12 @@ function resolveCSharpAttrs(attrs: CSharpCommonAttrs, resolver: Rules.LabelResol
         compilerOptions: attrs.compilerOptions || [],
         analyzers: (attrs.analyzers || []).map(f => Rules.sourceArtifact(f))
     };
+}
+
+function resolveCSharpRef(reference: CSharpRef, resolver: Rules.LabelResolver): Rules.SourceArtifact {
+    return typeof reference === "string"
+        ? resolver.resolve(reference)
+        : Rules.sourceArtifact(reference.file);
 }
 
 // ============================================================================

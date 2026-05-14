@@ -76,7 +76,7 @@ export const myLib = CSharp.csharp_library({
     name: "MyLib",
     toolchain: toolchain,
     srcs: ["Foo.cs", "Bar.cs"],
-    fileRefs: [systemRuntime],
+    refs: [CSharp.fileLabel(systemRuntime)],
 });
 
 @@public
@@ -84,7 +84,7 @@ export const myApp = CSharp.csharp_binary({
     name: "MyApp",
     toolchain: toolchain,
     srcs: ["Program.cs"],
-    fileRefs: [systemRuntime],
+    refs: [CSharp.fileLabel(systemRuntime)],
     deps: [myLib],
 });
 ```
@@ -102,8 +102,7 @@ Compiles a C# class library (DLL).
 | `name` | `string` | required | Assembly name (becomes `{name}.dll`) |
 | `toolchain` | `CSharpToolchain` | required | Toolchain that provides `dotnet`, `csc.dll`, and any compiler sidecar payload |
 | `srcs` | `Label[]` | required | C# source file labels |
-| `refs` | `Label[]` | `[]` | Assembly reference labels (resolved to files) |
-| `fileRefs` | `File[]` | `[]` | Pre-resolved assembly references (e.g. from downloads or NuGet) |
+| `refs` | `CSharpRef[]` | `[]` | Assembly references, either workspace labels or `CSharp.fileLabel(...)` wrappers for external files |
 | `deps` | `CSharpInfo[]` | `[]` | Dependencies on other C# targets |
 | `optimize` | `boolean` | `false` | Enable compiler optimizations |
 | `allowUnsafe` | `boolean` | `false` | Allow unsafe code blocks |
@@ -138,14 +137,12 @@ const lib = CSharp.csharp_library({ name: "Lib", toolchain, srcs: ["Lib.cs"], ..
 const app = CSharp.csharp_binary({ name: "App", toolchain, srcs: ["Main.cs"], deps: [lib], ... });
 ```
 
-## Labels vs File References
+## References
 
-Rules accept two kinds of references:
+Use `refs` for all assembly references:
 
-- **`refs: Label[]`** — string labels resolved by the framework. Use for workspace-local files.
-- **`fileRefs: File[]`** — pre-resolved `File` objects. Use for files from downloaded SDKs, NuGet packages, or other resolvers.
-
-Both are merged before compilation.
+- **`"//pkg:File.dll"`** — a normal workspace label
+- **`CSharp.fileLabel(file)`** — wrap an externally acquired `File` so it still flows through the label-based `refs` field
 
 ## Analyzers and Source Generators
 
@@ -157,7 +154,7 @@ CSharp.csharp_binary({
     toolchain: toolchain,
     srcs: ["Test.cs"],
     analyzers: [mySourceGeneratorDll],
-    fileRefs: [systemRuntime],
+    refs: [CSharp.fileLabel(systemRuntime)],
 });
 ```
 

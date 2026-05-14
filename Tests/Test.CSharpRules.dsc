@@ -29,12 +29,12 @@ function test_sdkToolchain_buildsLibraryGraph(): string {
         name: "ToolchainSmokeTest",
         toolchain: toolchain,
         srcs: ["src/TestLib.cs"],
-        fileRefs: [systemRuntime],
+        refs: [CSharp.fileLabel(systemRuntime)],
     });
 
     Contract.assert(lib !== undefined, "csharp_library must return a provider");
     Contract.assert(lib.binary !== undefined, "csharp_library must surface the compiled binary");
-    Contract.assert(lib.refs.length === 1, "expected the direct fileRef to be preserved");
+    Contract.assert(lib.refs.length === 1, "expected the direct ref to be preserved");
     Contract.assert(lib.defaultInfo.files.length === 1, "DefaultInfo.files must contain the binary");
     Contract.assert(lib.defaultInfo.runfiles !== undefined, "runfiles should be populated");
     Contract.assert(lib.defaultInfo.runfiles.length >= 2, "runfiles should include the binary and direct refs");
@@ -104,7 +104,7 @@ function test_sdkToolchain_buildsAndRunsBinary(): string {
         name: "ToolchainBinarySmokeTest",
         toolchain: toolchain,
         srcs: ["src/TestProgram.cs"],
-        fileRefs: [systemRuntime, systemIoFileSystem],
+        refs: [CSharp.fileLabel(systemRuntime), CSharp.fileLabel(systemIoFileSystem)],
     });
 
     const result = runManagedBinary({
