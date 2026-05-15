@@ -66,16 +66,19 @@ const toolchain = CSharp.csharpToolchainFromContents({
     compilerPath: "sdk/10.0.201/Roslyn/bincore/csc.dll",
 });
 
-const systemRuntime = dotnetSdk.getFile(
-    r`packs/Microsoft.NETCore.App.Ref/10.0.5/ref/net10.0/System.Runtime.dll`
-);
+const externalPackages = Map.empty<string, StaticDirectory>()
+    .add("DotNetSdk", dotnetSdk);
+
+const systemRuntimeLabel =
+    "@DotNetSdk//packs/Microsoft.NETCore.App.Ref/10.0.5/ref/net10.0:System.Runtime.dll";
 
 @@public
 export const myLib = CSharp.csharp_library({
     name: "MyLib",
     toolchain: toolchain,
     srcs: ["Foo.cs", "Bar.cs"],
-    fileRefs: [systemRuntime],
+    refs: [systemRuntimeLabel],
+    externalPackages: externalPackages,
 });
 
 @@public
@@ -83,12 +86,13 @@ export const myApp = CSharp.csharp_binary({
     name: "MyApp",
     toolchain: toolchain,
     srcs: ["Program.cs"],
-    fileRefs: [systemRuntime],
+    refs: [systemRuntimeLabel],
+    externalPackages: externalPackages,
     deps: [myLib],
 });
 ```
 
-Source files are labels (strings), not file paths. The rule resolves them, invokes the supplied Roslyn compiler, and returns a `CSharpInfo` provider with the compiled assembly.
+Source files and references are labels (strings), not file paths. The rule resolves them — `@DotNetSdk//path:file` labels look up `DotNetSdk` in `externalPackages` — invokes the supplied Roslyn compiler, and returns a `CSharpInfo` provider with the compiled assembly.
 
 ## Rules
 
@@ -102,7 +106,7 @@ Compiles a C# class library (DLL).
 | `toolchain` | `CSharpToolchain` | required | Toolchain that provides `dotnet` and `csc.dll` |
 | `srcs` | `Label[]` | required | C# source file labels |
 | `refs` | `Label[]` | `[]` | Assembly reference labels (resolved to files) |
-| `fileRefs` | `File[]` | `[]` | Pre-resolved assembly references (e.g. from downloads or NuGet) |
+| `externalPackages` | `Map<string, StaticDirectory>` | `undefined` | Map of external package names for `@pkg//path:file` label resolution |
 | `deps` | `CSharpInfo[]` | `[]` | Dependencies on other C# targets |
 | `optimize` | `boolean` | `false` | Enable compiler optimizations |
 | `allowUnsafe` | `boolean` | `false` | Allow unsafe code blocks |
@@ -110,6 +114,7 @@ Compiles a C# class library (DLL).
 | `defines` | `string[]` | `[]` | Preprocessor define constants |
 | `nowarn` | `string[]` | `[]` | Warning codes to suppress |
 | `analyzers` | `File[]` | `[]` | Roslyn analyzer/source-generator DLLs |
+| `analyzerConfigs` | `File[]` | `[]` | Analyzer config (`.globalconfig`) files |
 | `compilerOptions` | `string[]` | `[]` | Additional raw csc flags |
 
 ### csharp_binary
@@ -137,14 +142,15 @@ const lib = CSharp.csharp_library({ name: "Lib", toolchain, srcs: ["Lib.cs"], ..
 const app = CSharp.csharp_binary({ name: "App", toolchain, srcs: ["Main.cs"], deps: [lib], ... });
 ```
 
-## Labels vs File References
+## Labels and external packages
 
-Rules accept two kinds of references:
+All file references go through the label system; there is no escape hatch for raw `File` objects. Label forms:
 
-- **`refs: Label[]`** — string labels resolved by the framework. Use for workspace-local files.
-- **`fileRefs: File[]`** — pre-resolved `File` objects. Use for files from downloaded SDKs, NuGet packages, or other resolvers.
+- `"Foo.cs"` / `":Foo.cs"` — local file in the current package.
+- `"//path/to/pkg:file"` — workspace-relative file.
+- `"@pkg//path:file"` — file inside an external package; `pkg` must be present in the rule's `externalPackages` map.
 
-Both are merged before compilation.
+This guarantees every input is namespaced and traceable through the build graph rather than smuggled in as an opaque `File`.
 
 ## Analyzers and Source Generators
 
@@ -156,7 +162,8 @@ CSharp.csharp_binary({
     toolchain: toolchain,
     srcs: ["Test.cs"],
     analyzers: [mySourceGeneratorDll],
-    fileRefs: [systemRuntime],
+    refs: [systemRuntimeLabel],
+    externalPackages: externalPackages,
 });
 ```
 
