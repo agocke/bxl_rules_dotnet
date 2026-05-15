@@ -38,8 +38,6 @@ The example above uses the Linux x64 SDK archive. Swap the URL and `compilerPath
 
 Third-party workspaces that use both `bxl_rules` and `bxl_rules_csharp` should declare both: `bxl_rules` via `GitRepository` (or another resolver of their choice) and this repo as a normal DScript root/module.
 
-For local paired changes across both repos, set `BXL_RULES_ROOT=/path/to/bxl_rules` before running `./run-tests.sh`; the script will switch to `config.local-deps.dsc` and load `Sdk.Rules` from that checkout.
-
 ### 2. Construct a toolchain from the downloaded SDK
 
 ```typescript
