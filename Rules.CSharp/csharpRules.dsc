@@ -160,6 +160,13 @@ export interface CSharpCommonAttrs {
     /** Roslyn analyzer/source-generator DLLs (passed via /analyzer:). */
     analyzers?: File[];
 
+    /**
+     * Analyzer config files (passed via /analyzerconfig:).
+     * Used to provide build_property.* / build_metadata.* options to
+     * source generators and analyzers. Typically `.globalconfig` files.
+     */
+    analyzerConfigs?: File[];
+
     /** Toolchain to use for this target. */
     toolchain: CSharpToolchain;
 
@@ -186,6 +193,7 @@ interface CSharpResolvedAttrs {
     nowarn: string[];
     compilerOptions: string[];
     analyzers: Rules.Artifact[];
+    analyzerConfigs: Rules.Artifact[];
 }
 
 /**
@@ -206,7 +214,8 @@ function resolveCSharpAttrs(attrs: CSharpCommonAttrs, resolver: Rules.LabelResol
         defines: attrs.defines || [],
         nowarn: attrs.nowarn || [],
         compilerOptions: attrs.compilerOptions || [],
-        analyzers: (attrs.analyzers || []).map(f => Rules.sourceArtifact(f))
+        analyzers: (attrs.analyzers || []).map(f => Rules.sourceArtifact(f)),
+        analyzerConfigs: (attrs.analyzerConfigs || []).map(f => Rules.sourceArtifact(f))
     };
 }
 
@@ -293,6 +302,7 @@ function compileImpl(actions: Rules.Actions, args: CSharpResolvedAttrs, toolchai
         ...args.defines.map(d => Cmd.argument(`/define:${d}`)),
         ...args.compilerOptions.map(o => Cmd.argument(o)),
         ...args.analyzers.map(a => Cmd.option("/analyzer:", Rules.cmdInput(a))),
+        ...args.analyzerConfigs.map(c => Cmd.option("/analyzerconfig:", Rules.cmdInput(c))),
         ...allRefs.map(r => Cmd.option("/reference:", Rules.cmdInput(r))),
         ...args.srcs.map(s => Cmd.argument(Rules.cmdInput(s)))
     ];
