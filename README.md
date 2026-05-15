@@ -15,7 +15,7 @@ config({
                 moduleName: "bxl_rules_repo",
                 owner: "agocke",
                 repository: "bxl_rules",
-                commit: "6d141ed04aafb5d021b219d8de127f4d929d72ca",
+                commit: "684f3255dcbd4ca08acede8eda932347bb6f9578",
             }],
         },
         {

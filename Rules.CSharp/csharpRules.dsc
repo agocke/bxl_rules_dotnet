@@ -43,18 +43,25 @@ export interface CSharpToolchain extends Rules.Toolchain {
 
     /** The dotnet host executable (runs csc.dll). */
     hostExe: File;
+
+    /**
+     * Extra arguments passed to the dotnet host BEFORE the compiler DLL.
+     * Useful for `--additionalprobingpath` when SDK symlinks are missing.
+     */
+    hostArguments?: Argument[];
 }
 
 /**
  * Create a CSharpToolchain from files.
  */
 @@public
-export function csharpToolchain(args: { name?: string, compiler: File, hostExe: File }): CSharpToolchain {
+export function csharpToolchain(args: { name?: string, compiler: File, hostExe: File, hostArguments?: Argument[] }): CSharpToolchain {
     return {
         kind: "CSharpToolchain",
         name: args.name || "csharp_toolchain",
         compiler: args.compiler,
-        hostExe: args.hostExe
+        hostExe: args.hostExe,
+        hostArguments: args.hostArguments
     };
 }
 
@@ -71,11 +78,13 @@ export function csharpToolchainFromContents(args: {
     contents: StaticDirectory,
     compilerPath: string,
     hostPath?: string,
+    hostArguments?: Argument[],
 }): CSharpToolchain {
     return csharpToolchain({
         name: args.name || "csharp_toolchain",
         compiler: findFileInContents(args.contents, args.compilerPath),
         hostExe: findFileInContents(args.contents, args.hostPath || "dotnet"),
+        hostArguments: args.hostArguments,
     });
 }
 
@@ -148,6 +157,13 @@ export interface CSharpCommonAttrs {
     /** Roslyn analyzer/source-generator DLLs (passed via /analyzer:). */
     analyzers?: File[];
 
+    /**
+     * Analyzer config files (passed via /analyzerconfig:).
+     * Used to provide build_property.* / build_metadata.* options to
+     * source generators and analyzers. Typically `.globalconfig` files.
+     */
+    analyzerConfigs?: File[];
+
     /** Toolchain to use for this target. */
     toolchain: CSharpToolchain;
 }
@@ -168,6 +184,7 @@ interface CSharpResolvedAttrs {
     nowarn: string[];
     compilerOptions: string[];
     analyzers: Rules.Artifact[];
+    analyzerConfigs: Rules.Artifact[];
 }
 
 /**
@@ -188,7 +205,8 @@ function resolveCSharpAttrs(attrs: CSharpCommonAttrs, resolver: Rules.LabelResol
         defines: attrs.defines || [],
         nowarn: attrs.nowarn || [],
         compilerOptions: attrs.compilerOptions || [],
-        analyzers: (attrs.analyzers || []).map(f => Rules.sourceArtifact(f))
+        analyzers: (attrs.analyzers || []).map(f => Rules.sourceArtifact(f)),
+        analyzerConfigs: (attrs.analyzerConfigs || []).map(f => Rules.sourceArtifact(f))
     };
 }
 
@@ -254,7 +272,9 @@ function compileImpl(actions: Rules.Actions, args: CSharpResolvedAttrs, toolchai
     const allRefs = [...args.refs, ...depRefs];
 
     // Build csc command line from the supplied toolchain.
+    // Host arguments (e.g., --additionalprobingpath) go before csc.dll.
     const cscArgs: Argument[] = [
+        ...(toolchain.hostArguments || []),
         Cmd.argument(Rules.cmdInput(Rules.sourceArtifact(toolchain.compiler))),
         Cmd.option("/out:", Rules.cmdOutput(outDll)),
         Cmd.argument(`/target:${targetType}`),
@@ -272,6 +292,7 @@ function compileImpl(actions: Rules.Actions, args: CSharpResolvedAttrs, toolchai
         ...args.defines.map(d => Cmd.argument(`/define:${d}`)),
         ...args.compilerOptions.map(o => Cmd.argument(o)),
         ...args.analyzers.map(a => Cmd.option("/analyzer:", Rules.cmdInput(a))),
+        ...args.analyzerConfigs.map(c => Cmd.option("/analyzerconfig:", Rules.cmdInput(c))),
         ...allRefs.map(r => Cmd.option("/reference:", Rules.cmdInput(r))),
         ...args.srcs.map(s => Cmd.argument(Rules.cmdInput(s)))
     ];

@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-REQUIRED_BXL_VERSION="0.2.0-ci.5.b2e4b6e"
+REQUIRED_BXL_VERSION="0.2.0-ci.8.5f00873"
 
 case "$(uname -s)" in
     Linux*)   ARCH_DIR="linux-x64" ;;
