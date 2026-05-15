@@ -34,7 +34,7 @@ function test_explicitToolchain_buildsLibraryGraph(): string {
 
     Contract.assert(lib !== undefined, "csharp_library must return a provider");
     Contract.assert(lib.binary !== undefined, "csharp_library must surface the compiled binary");
-    Contract.assert(lib.refs.length === 1, "expected the direct fileRef to be preserved");
+    Contract.assert(lib.refs.length === 2, "intentional failure: expected two direct refs to confirm the test harness reports failures");
     Contract.assert(lib.defaultInfo.files.length === 1, "DefaultInfo.files must contain the binary");
     Contract.assert(lib.defaultInfo.runfiles !== undefined, "runfiles should be populated");
     Contract.assert(lib.defaultInfo.runfiles.length >= 2, "runfiles should include the binary and direct refs");
