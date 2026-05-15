@@ -43,18 +43,25 @@ export interface CSharpToolchain extends Rules.Toolchain {
 
     /** The dotnet host executable (runs csc.dll). */
     hostExe: File;
+
+    /**
+     * Extra arguments passed to the dotnet host BEFORE the compiler DLL.
+     * Useful for `--additionalprobingpath` when SDK symlinks are missing.
+     */
+    hostArguments?: Argument[];
 }
 
 /**
  * Create a CSharpToolchain from files.
  */
 @@public
-export function csharpToolchain(args: { name?: string, compiler: File, hostExe: File }): CSharpToolchain {
+export function csharpToolchain(args: { name?: string, compiler: File, hostExe: File, hostArguments?: Argument[] }): CSharpToolchain {
     return {
         kind: "CSharpToolchain",
         name: args.name || "csharp_toolchain",
         compiler: args.compiler,
-        hostExe: args.hostExe
+        hostExe: args.hostExe,
+        hostArguments: args.hostArguments
     };
 }
 
@@ -71,11 +78,13 @@ export function csharpToolchainFromContents(args: {
     contents: StaticDirectory,
     compilerPath: string,
     hostPath?: string,
+    hostArguments?: Argument[],
 }): CSharpToolchain {
     return csharpToolchain({
         name: args.name || "csharp_toolchain",
         compiler: findFileInContents(args.contents, args.compilerPath),
         hostExe: findFileInContents(args.contents, args.hostPath || "dotnet"),
+        hostArguments: args.hostArguments,
     });
 }
 
@@ -264,7 +273,9 @@ function compileImpl(actions: Rules.Actions, args: CSharpResolvedAttrs, toolchai
     const allRefs = [...args.refs, ...depRefs];
 
     // Build csc command line from the supplied toolchain.
+    // Host arguments (e.g., --additionalprobingpath) go before csc.dll.
     const cscArgs: Argument[] = [
+        ...(toolchain.hostArguments || []),
         Cmd.argument(Rules.cmdInput(Rules.sourceArtifact(toolchain.compiler))),
         Cmd.option("/out:", Rules.cmdOutput(outDll)),
         Cmd.argument(`/target:${targetType}`),
