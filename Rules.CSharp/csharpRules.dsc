@@ -130,10 +130,7 @@ export interface CSharpCommonAttrs {
     /** Assembly reference labels (resolved by the rule). */
     refs?: Rules.Label[];
 
-    /**
-     * Pre-resolved assembly references (e.g., from NuGet importFrom).
-     * Prefer using `@pkg` labels with `externalPackages` instead.
-     */
+    /** Pre-resolved assembly references (e.g., from NuGet importFrom). */
     fileRefs?: File[];
 
     /** Dependencies on other C# targets built by this SDK. */
@@ -170,11 +167,6 @@ export interface CSharpCommonAttrs {
     /** Toolchain to use for this target. */
     toolchain: CSharpToolchain;
 
-    /**
-     * External packages for `@pkg//path:file` label resolution.
-     * Keys are package names; values are StaticDirectory contents.
-     */
-    externalPackages?: Map<string, StaticDirectory>;
 }
 
 // ============================================================================
@@ -236,7 +228,6 @@ function createCSharpRule<TAttrs extends CSharpCommonAttrs>(doc: string, targetT
     return (args: TAttrs) => Rules.rule<TAttrs, CSharpResolvedAttrs, CSharpToolchain, CSharpInfo>({
         doc: doc,
         toolchain: args.toolchain,
-        externalPackages: args.externalPackages,
         resolve: resolveCSharpAttrs,
         impl: (ctx) => compileImpl(ctx.actions, ctx.args, ctx.toolchain, targetType)
     })(args);
