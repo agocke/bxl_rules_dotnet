@@ -166,7 +166,6 @@ export interface CSharpCommonAttrs {
 
     /** Toolchain to use for this target. */
     toolchain: CSharpToolchain;
-
 }
 
 // ============================================================================

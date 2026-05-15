@@ -18,7 +18,7 @@ jobs:
           dotnet-version: 9.0.x
 
       - name: Install BuildXL bootstrap compiler
-        run: dotnet tool install --global agtest.bxl.tool --version 0.2.0-ci.5.b2e4b6e
+        run: dotnet tool install --global agtest.bxl.tool --version 0.2.0-ci.8.5f00873
 
       - name: Run DScript tests
         run: ./run-tests.sh
