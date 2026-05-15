@@ -21,7 +21,7 @@
  *       name: "MyLib",
  *       toolchain: toolchain,
  *       srcs: globR(d`.`, "*.cs"),
- *       fileRefs: [f`path/to/Dependency.dll`],
+ *       refs: ["@SomePackage//path:Dependency.dll"],
  *   });
  */
 
@@ -130,9 +130,6 @@ export interface CSharpCommonAttrs {
     /** Assembly reference labels (resolved by the rule). */
     refs?: Rules.Label[];
 
-    /** Pre-resolved assembly references (e.g., from NuGet importFrom). */
-    fileRefs?: File[];
-
     /** Dependencies on other C# targets built by this SDK. */
     deps?: CSharpInfo[];
 
@@ -200,11 +197,10 @@ interface CSharpResolvedAttrs {
  * the framework which fields are labels and how to resolve them.
  */
 function resolveCSharpAttrs(attrs: CSharpCommonAttrs, resolver: Rules.LabelResolver): CSharpResolvedAttrs {
-    const refFiles = attrs.refs ? resolver.resolveAll(attrs.refs) : [];
     return {
         name: attrs.name,
         srcs: resolver.resolveAll(attrs.srcs),
-        refs: [...refFiles, ...(attrs.fileRefs || []).map(f => Rules.sourceArtifact(f))],
+        refs: attrs.refs ? resolver.resolveAll(attrs.refs) : [],
         deps: attrs.deps || [],
         optimize: attrs.optimize || false,
         allowUnsafe: attrs.allowUnsafe || false,
