@@ -164,6 +164,13 @@ export interface CSharpCommonAttrs {
      */
     analyzerConfigs?: File[];
 
+    /**
+     * External packages available for `@pkg//path:file` label resolution
+     * in `srcs` and `refs`. Forwarded to the underlying Rules.rule
+     * definition; see Sdk.Rules for the resolution semantics.
+     */
+    externalPackages?: Map<string, StaticDirectory>;
+
     /** Toolchain to use for this target. */
     toolchain: CSharpToolchain;
 }
@@ -227,6 +234,7 @@ function createCSharpRule<TAttrs extends CSharpCommonAttrs>(doc: string, targetT
     return (args: TAttrs) => Rules.rule<TAttrs, CSharpResolvedAttrs, CSharpToolchain, CSharpInfo>({
         doc: doc,
         toolchain: args.toolchain,
+        externalPackages: args.externalPackages,
         resolve: resolveCSharpAttrs,
         impl: (ctx) => compileImpl(ctx.actions, ctx.args, ctx.toolchain, targetType)
     })(args);
